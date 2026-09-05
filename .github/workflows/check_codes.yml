@@ -1,0 +1,61 @@
+name: WWM Code Watcher
+
+on:
+  schedule:
+    # GitHub cron uses UTC. Every 30 minutes.
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      test_notification:
+        description: "Send a Discord test notification only"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wwm-code-watcher
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Chromium for Playwright
+        run: python -m playwright install --with-deps chromium
+
+      - name: Check WWM codes
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TEST_NOTIFICATION: ${{ github.event_name == 'workflow_dispatch' && inputs.test_notification || 'false' }}
+        run: python check_codes.py
+
+      - name: Save watcher state
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.test_notification != true }}
+        run: |
+          if git diff --quiet -- data/codes.json; then
+            echo "No state change to commit."
+            exit 0
+          fi
+
+          git config user.name "wwm-code-watcher[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/codes.json
+          git commit -m "chore: update WWM code watcher state"
+          git push
